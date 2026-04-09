@@ -63,16 +63,18 @@ func Test2(t *testing.T) {
 	s.ProcessAsync(
 		&scheduler.ScheduleAsyncEvent[string]{
 			AsyncVariant: scheduler.TimerAsync(
-				false,
-				[]string{"timer"},
-				time.Millisecond*256,
-				func() {
-					// invoked on arbiter goroutine
-					log.Printf("%s<timer>: %d", logPrefix, seqnum.Add(1))
-				},
-				func(selectCount uint32) {
-					// invoked on arbiter goroutine
-					log.Printf("%s<timer>: released, selectCount=%d", logPrefix, selectCount)
+				&scheduler.TimerAsyncArgs[string]{
+					ReleaseGroup: false,
+					GroupSlice:   []string{"timer"},
+					Delay:        time.Millisecond * 256,
+					SelectFunc: func() {
+						// invoked on arbiter goroutine
+						log.Printf("%s<timer>: %d", logPrefix, seqnum.Add(1))
+					},
+					ReleaseFunc: func(selectCount uint32) {
+						// invoked on arbiter goroutine
+						log.Printf("%s<timer>: released, selectCount=%d", logPrefix, selectCount)
+					},
 				},
 			),
 		},
@@ -82,16 +84,18 @@ func Test2(t *testing.T) {
 	s.ProcessAsync(
 		&scheduler.ScheduleAsyncEvent[string]{
 			AsyncVariant: scheduler.TickerAsync(
-				false,
-				[]string{"ticker"},
-				time.Millisecond*333,
-				func() {
-					// invoked on arbiter goroutine
-					log.Printf("%s<ticker>: %d", logPrefix, seqnum.Add(1))
-				},
-				func(selectCount uint32) {
-					// invoked on arbiter goroutine
-					log.Printf("%s<ticker>: released, selectCount=%d", logPrefix, selectCount)
+				&scheduler.TickerAsyncArgs[string]{
+					ReleaseGroup: false,
+					GroupSlice:   []string{"ticker"},
+					Interval:     time.Millisecond * 333,
+					SelectFunc: func() {
+						// invoked on arbiter goroutine
+						log.Printf("%s<ticker>: %d", logPrefix, seqnum.Add(1))
+					},
+					ReleaseFunc: func(selectCount uint32) {
+						// invoked on arbiter goroutine
+						log.Printf("%s<ticker>: released, selectCount=%d", logPrefix, selectCount)
+					},
 				},
 			),
 		},
@@ -104,47 +108,82 @@ func Test2(t *testing.T) {
 		},
 	)
 
-	rf := func(q *scheduler.Sequence[string], stepIndex uint16, stepResult bool, sequenceResult bool) {
-		if !stepResult {
-			log.Printf("%s<sequence>: group=%+v, interrupted at stepIndex=%d", logPrefix, q.GroupSlice, stepIndex)
-			return
-		}
+	step_rf := func(p *scheduler.Step[string], result bool) {
+		log.Printf(
+			"%s<sequence>: group=%s, step<%d/%d>, type=%s, rep<%d/%d>, step %s",
+			logPrefix,
+			p.PrintGroup(),
+			p.StepNum(),
+			p.StepLen(),
+			p.Descriptor(),
+			p.RepNum(),
+			p.RepTotal(),
+			func() string {
+				if result {
+					return "completed"
+				} else {
+					return "interrupted"
+				}
+			}(),
+		)
+	}
 
-		if sequenceResult {
-			log.Printf("%s<sequence>: group=%+v, completed", logPrefix, q.GroupSlice)
-			return
-		}
+	seq_rf := func(q *scheduler.Sequence[string], result bool) {
+		log.Printf(
+			"%s<sequence>: group=%s, step<%d/%d>, sequence %s",
+			logPrefix,
+			q.PrintGroup(),
+			q.StepNum(),
+			q.StepLen(),
+			func() string {
+				if result {
+					return "completed"
+				} else {
+					return "interrupted"
+				}
+			}(),
+		)
 	}
 
 	s.ProcessAsync(
 		&scheduler.ScheduleSequenceEvent[string]{
 			Sequence: scheduler.NewSequence(
-				s,
-				false,
-				[]string{"sequence"},
-				[]*scheduler.Step[string]{
-					scheduler.TimerStep[string](time.Millisecond * 1500),
-					scheduler.SequenceStep(
-						5,
-						scheduler.NewSequence(
-							s,
-							false,
-							[]string{"sequence"},
-							[]*scheduler.Step[string]{
-								scheduler.ActionStep[string](func() error {
-									// invoked on arbiter goroutine
-									log.Printf("%s<sequence>: %d", logPrefix, seqnum.Add(1))
-									return nil
-								}),
-								scheduler.TimerStep[string](time.Second),
+				&scheduler.SequenceArgs[string]{
+					Scheduler:    s,
+					InheritGroup: false,
+					ReleaseGroup: false,
+					GroupSlice:   []string{"sequence"},
+					StepSlice: []*scheduler.Step[string]{
+						scheduler.TimerStep(&scheduler.TimerStepArgs[string]{Delay: time.Millisecond * 1500}),
+						scheduler.SequenceStep(
+							&scheduler.SequenceStepArgs[string]{
+								Sequence: scheduler.NewSequence(
+									&scheduler.SequenceArgs[string]{
+										Scheduler:    s,
+										InheritGroup: true,
+										ReleaseGroup: false,
+										GroupSlice:   nil,
+										StepSlice: []*scheduler.Step[string]{
+											scheduler.ActionStep(&scheduler.ActionStepArgs[string]{Action: func() error {
+												// invoked on arbiter goroutine
+												log.Printf("%s<sequence>: %d", logPrefix, seqnum.Add(1))
+												return nil
+											}}),
+											scheduler.TimerStep(&scheduler.TimerStepArgs[string]{Delay: time.Second}),
+										},
+										StepResultFunc:     step_rf,
+										SequenceResultFunc: seq_rf,
+										LogProgressMode:    scheduler.LogProgressModeRep,
+									},
+								),
+								RepTotal: 5,
 							},
-							rf,
-							scheduler.LogProgressModeRep,
 						),
-					),
+					},
+					StepResultFunc:     step_rf,
+					SequenceResultFunc: seq_rf,
+					LogProgressMode:    scheduler.LogProgressModeRep,
 				},
-				rf,
-				scheduler.LogProgressModeRep,
 			),
 		},
 	)

@@ -51,15 +51,17 @@ func New[G comparable](options *Options[G]) *Arbiter[G] {
 	a.s.ProcessAsync(
 		&scheduler.ScheduleAsyncEvent[G]{
 			AsyncVariant: scheduler.NewAsyncVariant(
-				false,
-				nil,
-				a.eventch.Out(),
-				func(_ *scheduler.Scheduler[G], _ *scheduler.AsyncVariant[G], recv interface{}) {
-					a.handle(recv)
-				},
-				func(_ *scheduler.Scheduler[G], v *scheduler.AsyncVariant[G]) {
-					log.Printf("%s: eventch released, selectCount=%d", a.LogPrefix, v.SelectCount)
-					a.eventch.Stop()
+				&scheduler.AsyncVariantArgs[G]{
+					ReleaseGroup: false,
+					GroupTracker: nil,
+					Chan:         a.eventch.Out(),
+					SelectFunc: func(_ *scheduler.Scheduler[G], _ *scheduler.AsyncVariant[G], recv interface{}) {
+						a.handle(recv)
+					},
+					ReleaseFunc: func(_ *scheduler.Scheduler[G], v *scheduler.AsyncVariant[G]) {
+						log.Printf("%s: eventch released, selectCount=%d", a.LogPrefix, v.SelectCount())
+						a.eventch.Stop()
+					},
 				},
 			),
 		},
@@ -118,6 +120,7 @@ func (a *Arbiter[G]) handle(recv interface{}) {
 				)
 			}
 		}()
+
 		evt.f()
 	}()
 
